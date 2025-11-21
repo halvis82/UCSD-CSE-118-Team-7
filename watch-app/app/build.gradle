@@ -30,6 +30,17 @@ android {
     kotlinOptions {
         jvmTarget = '17'
     }
+
+    packagingOptions {
+        resources {
+            excludes += [
+                'META-INF/INDEX.LIST',
+                'META-INF/DEPENDENCIES',
+                'META-INF/io.netty.versions.properties',
+                'META-INF/*.kotlin_module'
+            ]
+        }
+    }
 }
 
 dependencies {
@@ -41,9 +52,10 @@ dependencies {
     implementation 'androidx.core:core-ktx:1.12.0'
     implementation 'androidx.appcompat:appcompat:1.6.1'
 
-    // Networking
-    implementation 'com.squareup.okhttp3:okhttp:4.11.0'
-    implementation 'com.google.code.gson:gson:2.10.1'
+    // AWS SDK for DynamoDB
+    implementation 'software.amazon.awssdk:dynamodb:2.20.26'
+    implementation 'software.amazon.awssdk:auth:2.20.26'
+    implementation 'software.amazon.awssdk:url-connection-client:2.20.26'
 
     // Coroutines
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'

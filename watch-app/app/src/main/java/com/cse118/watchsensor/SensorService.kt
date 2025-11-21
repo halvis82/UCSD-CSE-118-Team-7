@@ -14,10 +14,6 @@ import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
-import okhttp3.*
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONObject
 import java.io.File
 import java.io.FileInputStream
 import java.util.Properties
@@ -32,10 +28,11 @@ class SensorService : Service(), SensorEventListener {
     private lateinit var wakeLock: PowerManager.WakeLock
     private val serviceScope = CoroutineScope(Dispatchers.Default + Job())
 
-    private val httpClient = OkHttpClient()
-    private var backendUrl: String = ""
+    private lateinit var dynamoDBWriter: DynamoDBWriter
+    private val classifier = ContextClassifier()
 
     private var lastHeartRate: Float = 0f
+    private var lastValidHeartRate: Float = 70f // Cache last valid HR, default to 70 bpm
     private var lastAccelX: Float = 0f
     private var lastAccelY: Float = 0f
     private var lastAccelZ: Float = 0f
@@ -97,13 +94,22 @@ class SensorService : Service(), SensorEventListener {
 
     private fun loadConfig() {
         try {
-            val configFile = File(filesDir, "config.properties")
+            val configFile = File(filesDir, "aws-config.properties")
             if (configFile.exists()) {
                 val props = Properties()
                 FileInputStream(configFile).use { props.load(it) }
-                backendUrl = props.getProperty("backend_url", "")
+
+                dynamoDBWriter = DynamoDBWriter(
+                    accessKeyId = props.getProperty("aws_access_key_id", ""),
+                    secretKey = props.getProperty("aws_secret_key", ""),
+                    regionName = props.getProperty("aws_region", "us-east-1"),
+                    tableName = props.getProperty("dynamodb_table_name", "ContextMusicData")
+                )
+            } else {
+                System.err.println("AWS config file not found at ${configFile.absolutePath}")
             }
         } catch (e: Exception) {
+            System.err.println("Error loading AWS config: ${e.message}")
             e.printStackTrace()
         }
     }
@@ -131,6 +137,10 @@ class SensorService : Service(), SensorEventListener {
         when (event.sensor.type) {
             Sensor.TYPE_HEART_RATE -> {
                 lastHeartRate = event.values[0]
+                // Cache valid heart rate readings (non-zero)
+                if (lastHeartRate > 0) {
+                    lastValidHeartRate = lastHeartRate
+                }
             }
             Sensor.TYPE_ACCELEROMETER -> {
                 lastAccelX = event.values[0]
@@ -155,44 +165,47 @@ class SensorService : Service(), SensorEventListener {
     private fun startDataSending() {
         serviceScope.launch {
             while (isActive) {
-                sendDataToBackend()
+                sendDataToDynamoDB()
                 delay(SEND_INTERVAL_MS)
             }
         }
     }
 
-    private fun sendDataToBackend() {
-        if (backendUrl.isEmpty()) return
+    private fun sendDataToDynamoDB() {
+        if (!::dynamoDBWriter.isInitialized) {
+            System.err.println("DynamoDB writer not initialized, skipping write")
+            return
+        }
 
         serviceScope.launch {
             try {
-                val jsonObject = JSONObject().apply {
-                    put("timestamp", System.currentTimeMillis())
-                    put("heartRate", lastHeartRate)
-                    put("accelX", lastAccelX)
-                    put("accelY", lastAccelY)
-                    put("accelZ", lastAccelZ)
-                    put("gyroX", lastGyroX)
-                    put("gyroY", lastGyroY)
-                    put("gyroZ", lastGyroZ)
-                    put("steps", lastStepCount.toInt())
-                }
+                // Use cached heart rate if current reading is 0
+                val heartRateToUse = if (lastHeartRate > 0) lastHeartRate else lastValidHeartRate
 
-                val requestBody = jsonObject.toString()
-                    .toRequestBody("application/json".toMediaType())
+                // Classify movement based on sensor data
+                val movement = classifier.classifyMovement(
+                    lastAccelX,
+                    lastAccelY,
+                    lastAccelZ,
+                    heartRateToUse
+                )
 
-                val request = Request.Builder()
-                    .url(backendUrl)
-                    .post(requestBody)
-                    .build()
+                // Create context object
+                val context = WatchContext(
+                    heartRate = heartRateToUse.toInt(),
+                    movement = movement,
+                    timestamp = System.currentTimeMillis() / 1000
+                )
 
-                httpClient.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) {
-                        // Log error but continue monitoring
-                        println("Failed to send data: ${response.code}")
-                    }
+                // Write to DynamoDB
+                val success = dynamoDBWriter.writeContextData(context)
+                if (success) {
+                    println("Successfully wrote context to DynamoDB: HR=${context.heartRate}, Movement=${context.movement}")
+                } else {
+                    System.err.println("Failed to write context to DynamoDB")
                 }
             } catch (e: Exception) {
+                System.err.println("Error sending data to DynamoDB: ${e.message}")
                 e.printStackTrace()
             }
         }
