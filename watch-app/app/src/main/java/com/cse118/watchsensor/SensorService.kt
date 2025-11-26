@@ -45,6 +45,10 @@ class SensorService : Service(), SensorEventListener {
         private const val NOTIFICATION_CHANNEL_ID = "sensor_monitoring"
         private const val NOTIFICATION_ID = 1
         private const val SEND_INTERVAL_MS = 5000L // Send data every 5 seconds
+        const val ACTION_SENSOR_UPDATE = "com.cse118.watchsensor.SENSOR_UPDATE"
+        const val EXTRA_CONTEXT_STATE = "context_state"
+        const val EXTRA_HEART_RATE = "heart_rate"
+        const val EXTRA_ACCEL_MAGNITUDE = "accel_magnitude"
     }
 
     override fun onCreate() {
@@ -182,8 +186,8 @@ class SensorService : Service(), SensorEventListener {
                 // Use cached heart rate if current reading is 0
                 val heartRateToUse = if (lastHeartRate > 0) lastHeartRate else lastValidHeartRate
 
-                // Classify movement based on sensor data
-                val movement = classifier.classifyMovement(
+                // Classify context based on sensor data
+                val contextState = classifier.classifyContext(
                     lastAccelX,
                     lastAccelY,
                     lastAccelZ,
@@ -193,7 +197,7 @@ class SensorService : Service(), SensorEventListener {
                 // Create context object
                 val context = WatchContext(
                     heartRate = heartRateToUse.toInt(),
-                    movement = movement,
+                    movement = contextState,
                     timestamp = System.currentTimeMillis() / 1000
                 )
 
@@ -204,6 +208,15 @@ class SensorService : Service(), SensorEventListener {
                 } else {
                     System.err.println("Failed to write context to DynamoDB")
                 }
+
+                // Broadcast sensor data to MainActivity
+                val magnitude = kotlin.math.sqrt(lastAccelX * lastAccelX + lastAccelY * lastAccelY + lastAccelZ * lastAccelZ)
+                val broadcastIntent = Intent(ACTION_SENSOR_UPDATE).apply {
+                    putExtra(EXTRA_CONTEXT_STATE, contextState)
+                    putExtra(EXTRA_HEART_RATE, heartRateToUse.toInt())
+                    putExtra(EXTRA_ACCEL_MAGNITUDE, magnitude)
+                }
+                sendBroadcast(broadcastIntent)
             } catch (e: Exception) {
                 System.err.println("Error sending data to DynamoDB: ${e.message}")
                 e.printStackTrace()
