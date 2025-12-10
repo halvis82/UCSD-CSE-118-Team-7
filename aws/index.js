@@ -12,7 +12,7 @@ const DDB_PARTITION_KEY_VALUE = 'MY_ALEXA_USER';
 const Util = require('./util'); 
 
 const CLASSIFICATION_MAPPING = {
-    'SLEEP': 'sleeping', 
+    'SLEEPING': 'sleeping', 
     'ACTIVE': 'active_2',   
     'RESTING': 'resting',    
     'WORKOUT': 'workout', 
